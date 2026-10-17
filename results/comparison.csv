@@ -1,0 +1,4 @@
+method,TP,FP,TN,FN,accuracy,precision,recall,f1,acc_ci_low,acc_ci_high,ms_per_image,mcnemar_p_vs_proposed
+Proposed (black-hat),966,56,943,35,0.9545,0.9452,0.965,0.955,0.9445,0.9628,21.2008,
+Global Otsu,823,984,15,178,0.419,0.4555,0.8222,0.5862,0.3976,0.4408,13.4418,0.0
+Canny (130/390),949,91,908,52,0.9285,0.9125,0.9481,0.9299,0.9164,0.939,8.2537,0.0

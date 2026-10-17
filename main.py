@@ -3,7 +3,7 @@
 Examples:
     python main.py --image wall.jpg --mm-per-pixel 0.2
     python main.py --folder photos/
-    python main.py --demo
+    python main.py --evaluate metu
     python main.py --evaluate cfd
 """
 from __future__ import annotations
@@ -13,13 +13,11 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-import cv2
-
 from config import get_config
+from src.evaluate import run_evaluation
 from src.measure import pick_scale_interactively
-from src.pipeline import PipelineResult, process_array, process_image, results_to_csv
-from src.preprocess import load_image, resize_if_large
-from src.synthetic import make_synthetic_crack_image
+from src.pipeline import PipelineResult, process_image, results_to_csv
+from src.preprocess import load_image
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +25,6 @@ def build_parser() -> argparse.ArgumentParser:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--image", type=Path, help="path to one image")
     src.add_argument("--folder", type=Path, help="folder of images (batch mode)")
-    src.add_argument("--demo", action="store_true", help="run on a generated synthetic crack image")
     src.add_argument("--evaluate", choices=["cfd", "metu"], help="evaluate on a dataset")
     p.add_argument("--mm-per-pixel", type=float, default=None, help="scale; omit to report pixels")
     p.add_argument("--calibrate", action="store_true",
@@ -98,21 +95,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     out_dir: Path = cfg["paths"]["results_dir"]
 
     if args.evaluate:
-        try:
-            from src.evaluate import run_evaluation
-        except ImportError:
-            print("Evaluation is not implemented yet.")
-            return 1
         return run_evaluation(args.evaluate, cfg)
 
     mm = resolve_scale(args, cfg)
-
-    if args.demo:
-        image, _gt = make_synthetic_crack_image()
-        image, scale = resize_if_large(image, cfg["preprocess"]["max_side"])
-        out_dir.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_dir / "synthetic_input.png"), image)
-        return run_paths([out_dir / "synthetic_input.png"], cfg, mm, out_dir, csv_name="synthetic_cracks.csv")
 
     if args.image:
         return run_paths([args.image], cfg, mm, out_dir, csv_name=f"{args.image.stem}_cracks.csv")
