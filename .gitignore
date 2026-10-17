@@ -6,3 +6,7 @@
 # datasets are large; download them yourself (see data/README.md)
 data/metu/
 data/cfd/
+
+# outputs of single-image / batch runs
+results/measurements.csv
+results/*_steps.png

@@ -1,10 +1,10 @@
 """Command-line interface for the Concrete Crack Detector.
 
-Examples:
-    python main.py --image wall.jpg --mm-per-pixel 0.2
+    python main.py --image wall.jpg [--mm-per-pixel 0.2] [--kernel 15] [--floor 60] [--min-area 50]
     python main.py --folder photos/
-    python main.py --evaluate metu
-    python main.py --evaluate cfd
+    python main.py --image wall.jpg --calibrate --ref-mm 100     (click a reference object)
+    python main.py --evaluate metu                               (also: cfd, not implemented)
+    python main.py --tune                                        (grid search on validation images)
 """
 from __future__ import annotations
 
@@ -14,114 +14,85 @@ from pathlib import Path
 from typing import List, Optional
 
 from config import get_config
-from src.evaluate import run_evaluation
+from src.evaluate import run_evaluation, tune
 from src.measure import pick_scale_interactively
-from src.pipeline import PipelineResult, process_image, results_to_csv
+from src.pipeline import PipelineResult, measurements_to_csv, process_image, save_steps_figure
 from src.preprocess import load_image
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Classical (no-ML) concrete crack detector and measurer.")
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--image", type=Path, help="path to one image")
-    src.add_argument("--folder", type=Path, help="folder of images (batch mode)")
-    src.add_argument("--evaluate", choices=["cfd", "metu"], help="evaluate on a dataset")
-    p.add_argument("--mm-per-pixel", type=float, default=None, help="scale; omit to report pixels")
-    p.add_argument("--calibrate", action="store_true",
-                   help="click two points on a reference object to compute the scale (needs --ref-mm)")
-    p.add_argument("--ref-mm", type=float, default=None, help="real length of the reference object in mm")
-    p.add_argument("--kernel", type=int, default=None, help="black-hat kernel size (default from config)")
-    p.add_argument("--min-area", type=int, default=None, help="minimum component area in px")
-    p.add_argument("--threshold", choices=["otsu", "adaptive", "fixed"], default=None)
-    p.add_argument("--results-dir", type=Path, default=None, help="output folder (default: results/)")
-    p.add_argument("--sample-size", type=int, default=None, help="images sampled for --evaluate metu")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--image", type=Path, help="path to one image")
+    mode.add_argument("--folder", type=Path, help="folder of images (batch mode)")
+    mode.add_argument("--evaluate", choices=["cfd", "metu"], help="evaluate on a dataset")
+    mode.add_argument("--tune", action="store_true", help="grid-search kernel size and threshold floor")
+    p.add_argument("--mm-per-pixel", type=float, help="scale; omit to report pixels")
+    p.add_argument("--calibrate", action="store_true", help="click two points on a reference object (needs --ref-mm)")
+    p.add_argument("--ref-mm", type=float, help="real length of the reference object in mm")
+    p.add_argument("--kernel", type=int, help="black-hat kernel size")
+    p.add_argument("--floor", type=int, help="black-hat contrast floor for thresholding")
+    p.add_argument("--min-area", type=int, help="minimum component area in px")
+    p.add_argument("--results-dir", type=Path, help="output folder (default: results/)")
     return p
 
 
-def apply_cli_overrides(args: argparse.Namespace) -> dict:
-    """Build the config, applying any command-line overrides."""
-    detect = {}
-    if args.kernel is not None:
-        detect["kernel_size"] = args.kernel
-    if args.min_area is not None:
-        detect["min_area"] = args.min_area
-    if args.threshold is not None:
-        detect["threshold_method"] = args.threshold
-    overrides = {"detect": detect}
-    if args.results_dir is not None:
-        overrides["paths"] = {"results_dir": args.results_dir}
-    if args.sample_size is not None:
-        overrides["evaluate"] = {"metu_sample_size": args.sample_size}
-    return get_config(overrides)
-
-
-def report(result: PipelineResult) -> None:
+def report(res: PipelineResult) -> None:
     """Print a human-readable summary for one image."""
-    if not result.ok:
-        print(f"[SKIP] {result.message}")
-        return
-    if result.n_cracks == 0:
-        print(f"[{result.name}] No cracks found.")
-        return
-    note = f"  ({result.message})" if result.message else ""
-    print(f"[{result.name}] {result.n_cracks} crack(s) found{note}")
-    for _, r in result.table.iterrows():
-        u = r["unit"]
-        print(f"   #{int(r['crack_id'])}: length={r['length']:.1f}{u}  "
-              f"mean width={r['mean_width']:.2f}{u}  max width={r['max_width']:.2f}{u}")
-
-
-def list_images(folder: Path, extensions: List[str]) -> List[Path]:
-    return sorted(p for p in folder.iterdir() if p.suffix.lower() in extensions)
-
-
-def resolve_scale(args: argparse.Namespace, cfg: dict) -> Optional[float]:
-    """Return mm-per-pixel (original resolution) from --mm-per-pixel or --calibrate."""
-    if args.calibrate:
-        if args.image is None or args.ref_mm is None:
-            sys.exit("--calibrate needs --image and --ref-mm (real length of the reference object).")
-        img = load_image(args.image)
-        if img is None:
-            sys.exit(f"Could not read image: {args.image}")
-        scale = pick_scale_interactively(img, args.ref_mm)
-        print(f"Calibrated scale: {scale:.4f} mm/pixel")
-        return scale
-    return args.mm_per_pixel
+    if not res.ok:
+        print(f"[SKIP] {res.message}")
+    elif res.n_cracks == 0:
+        print(f"[{res.name}] No cracks found.")
+    else:
+        print(f"[{res.name}] {res.n_cracks} crack(s) found {res.message}".rstrip())
+        for _, r in res.table.iterrows():
+            u = r["unit"]
+            print(f"   #{int(r['crack_id'])}: length={r['length']:.1f}{u}  "
+                  f"mean width={r['mean_width']:.2f}{u}  max width={r['max_width']:.2f}{u}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = apply_cli_overrides(args)
-    out_dir: Path = cfg["paths"]["results_dir"]
+    cfg = get_config()
+    for key, section, name in ((args.kernel, "detect", "kernel_size"), (args.floor, "detect", "min_threshold"),
+                               (args.min_area, "detect", "min_area"), (args.results_dir, "paths", "results_dir")):
+        if key is not None:
+            cfg[section][name] = key
+    out_dir = Path(cfg["paths"]["results_dir"])
 
     if args.evaluate:
         return run_evaluation(args.evaluate, cfg)
-
-    mm = resolve_scale(args, cfg)
+    if args.tune:
+        tune(cfg)
+        return 0
 
     if args.image:
-        return run_paths([args.image], cfg, mm, out_dir, csv_name=f"{args.image.stem}_cracks.csv")
-
-    if not args.folder.is_dir():
-        print(f"Folder not found: {args.folder}")
-        return 1
-    paths = list_images(args.folder, cfg["image_extensions"])
+        paths = [args.image]
+    elif args.folder.is_dir():
+        paths = sorted(p for p in args.folder.iterdir() if p.suffix.lower() in cfg["image_extensions"])
+    else:
+        paths = []
     if not paths:
-        print(f"No images found in {args.folder}")
+        print("No images to process.")
         return 1
-    return run_paths(paths, cfg, mm, out_dir, csv_name="measurements.csv")
 
+    mm = args.mm_per_pixel
+    if args.calibrate:
+        img = load_image(paths[0])
+        if img is None or args.ref_mm is None:
+            sys.exit("--calibrate needs a readable --image and --ref-mm.")
+        mm = pick_scale_interactively(img, args.ref_mm)
+        print(f"Calibrated scale: {mm:.4f} mm/pixel")
 
-def run_paths(paths: List[Path], cfg: dict, mm: Optional[float], out_dir: Path, csv_name: str) -> int:
-    """Process each path, print summaries and save the CSV."""
     results = []
     for path in paths:
-        res = process_image(path, cfg, mm, out_dir)
+        res = process_image(path, cfg, mm)
         report(res)
+        if res.ok:
+            save_steps_figure(res, out_dir / f"{path.stem}_steps.png", path.name, cfg)
         results.append(res)
-    df = results_to_csv(results, out_dir / csv_name)
-    print(f"\nSaved {len(df)} crack row(s) to {out_dir / csv_name}")
-    print(f"Overlays and figures saved in {out_dir}")
+    df = measurements_to_csv(results, out_dir / "measurements.csv")
+    print(f"\n{len(df)} crack row(s) saved to {out_dir / 'measurements.csv'}; step figures in {out_dir}")
     return 0 if any(r.ok for r in results) else 1
 
 

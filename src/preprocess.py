@@ -11,42 +11,28 @@ import numpy as np
 def load_image(path: str | Path) -> Optional[np.ndarray]:
     """Read an image as BGR. Returns None if the file is missing or unreadable.
 
-    ``np.fromfile`` + ``imdecode`` is used so Windows paths with non-ASCII
-    characters work (``cv2.imread`` fails on them).
+    ``np.fromfile`` + ``imdecode`` keeps Windows paths with non-ASCII characters working.
     """
     try:
         data = np.fromfile(str(path), dtype=np.uint8)
-        if data.size == 0:
-            return None
-        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
     except (OSError, ValueError):
         return None
 
 
 def resize_if_large(image: np.ndarray, max_side: int) -> Tuple[np.ndarray, float]:
-    """Shrink ``image`` so its longest side is at most ``max_side``.
-
-    Returns (image, scale) where scale = new_size / old_size (1.0 if unchanged).
-    """
+    """Shrink ``image`` so its longest side is at most ``max_side``; returns (image, scale)."""
     longest = max(image.shape[:2])
     if max_side <= 0 or longest <= max_side:
         return image, 1.0
     scale = max_side / longest
-    new_size = (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale)))
-    return cv2.resize(image, new_size, interpolation=cv2.INTER_AREA), scale
+    size = (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale)))
+    return cv2.resize(image, size, interpolation=cv2.INTER_AREA), scale
 
 
 def to_grayscale(image: np.ndarray) -> np.ndarray:
     """Convert a BGR (or already gray) image to single-channel uint8."""
-    if image.ndim == 2:
-        return image
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-
-def apply_clahe(gray: np.ndarray, clip_limit: float, tile_grid: int) -> np.ndarray:
-    """Contrast Limited Adaptive Histogram Equalisation (evens out lighting)."""
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_grid, tile_grid))
-    return clahe.apply(gray)
+    return image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
 def denoise(gray: np.ndarray, method: str, ksize: int) -> np.ndarray:
@@ -61,9 +47,9 @@ def denoise(gray: np.ndarray, method: str, ksize: int) -> np.ndarray:
     raise ValueError(f"Unknown blur method: {method!r}")
 
 
-def preprocess(gray_or_bgr: np.ndarray, cfg: Dict[str, Any]) -> np.ndarray:
-    """Full preprocessing: grayscale -> CLAHE -> blur. Returns uint8 gray."""
+def preprocess(image: np.ndarray, cfg: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Grayscale -> CLAHE -> blur. Returns every stage as {"gray", "clahe", "blur"}."""
     p = cfg["preprocess"]
-    gray = to_grayscale(gray_or_bgr)
-    gray = apply_clahe(gray, p["clahe_clip_limit"], p["clahe_tile_grid"])
-    return denoise(gray, p["blur"], p["blur_ksize"])
+    gray = to_grayscale(image)
+    clahe = cv2.createCLAHE(p["clahe_clip_limit"], (p["clahe_tile_grid"],) * 2).apply(gray)
+    return {"gray": gray, "clahe": clahe, "blur": denoise(clahe, p["blur"], p["blur_ksize"])}

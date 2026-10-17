@@ -17,25 +17,18 @@ def blackhat(gray: np.ndarray, kernel_size: int) -> np.ndarray:
 def threshold_blackhat(bh: np.ndarray, d: Dict[str, Any]) -> np.ndarray:
     """Binarise the black-hat image (Otsu, adaptive or fixed) -> uint8 0/255.
 
-    A floor (``min_threshold``) is always enforced: Otsu always splits *something*,
-    so without it a crack-free image would be filled with noise detections.
+    ``min_threshold`` is always enforced as a floor: Otsu always splits *something*, so
+    without it a crack-free image would be filled with texture detections.
     """
-    method = d["threshold_method"]
-    floor = d["min_threshold"]
-    # Texture on clean concrete also lights up after CLAHE; cap the foreground share so
-    # the threshold rises until only the strongest (crack-like) responses remain.
-    cap = d.get("max_foreground_fraction")
-    if cap:
-        floor = max(floor, float(np.quantile(bh, 1.0 - cap)))
+    method, floor = d["threshold_method"], d["min_threshold"]
     if method == "otsu":
         t, _ = cv2.threshold(bh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         _, mask = cv2.threshold(bh, max(t, floor), 255, cv2.THRESH_BINARY)
     elif method == "fixed":
         _, mask = cv2.threshold(bh, max(d["fixed_threshold"], floor), 255, cv2.THRESH_BINARY)
     elif method == "adaptive":
-        block = int(d["adaptive_block_size"]) | 1
-        local = cv2.adaptiveThreshold(bh, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                      cv2.THRESH_BINARY, block, -d["adaptive_c"])
+        local = cv2.adaptiveThreshold(bh, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,
+                                      int(d["adaptive_block_size"]) | 1, -d["adaptive_c"])
         mask = np.where(bh >= floor, local, 0)
     else:
         raise ValueError(f"Unknown threshold method: {method!r}")
@@ -51,13 +44,10 @@ def close_mask(mask: np.ndarray, ksize: int, iterations: int) -> np.ndarray:
 
 
 def filter_components(mask: np.ndarray, d: Dict[str, Any]) -> np.ndarray:
-    """Drop tiny specks and blob-like stains; keep long thin components.
+    """Drop specks and blob-like stains; keep long thin components.
 
-    A component is kept only if all hold:
-      * area >= min_area
-      * skeleton pixel count >= min_skeleton_length
-      * skeleton_length / sqrt(area) >= min_elongation   (long vs. fat)
-      * area / skeleton_length <= max_mean_width         (not a thick stain)
+    A component is kept only if: area >= min_area, skeleton length >= min_skeleton_length,
+    skeleton_length / sqrt(area) >= min_elongation, and area / skeleton_length <= max_mean_width.
     """
     binary = mask > 0
     if not binary.any():
@@ -67,22 +57,22 @@ def filter_components(mask: np.ndarray, d: Dict[str, Any]) -> np.ndarray:
     area = np.bincount(labels.ravel(), minlength=n).astype(float)
     skel_len = np.bincount(labels[skel], minlength=n).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        elongation = skel_len / np.sqrt(area)
-        mean_width = area / skel_len
-    keep = (
-        (area >= d["min_area"])
-        & (skel_len >= d["min_skeleton_length"])
-        & (elongation >= d["min_elongation"])
-        & (mean_width <= d["max_mean_width"])
-    )
+        keep = ((area >= d["min_area"]) & (skel_len >= d["min_skeleton_length"])
+                & (skel_len / np.sqrt(area) >= d["min_elongation"])
+                & (area / skel_len <= d["max_mean_width"]))
     keep[0] = False  # background label
     return (keep[labels] * 255).astype(np.uint8)
 
 
-def detect_cracks(gray: np.ndarray, cfg: Dict[str, Any]) -> np.ndarray:
-    """Run black-hat -> threshold -> close -> filter. Returns a 0/255 uint8 mask."""
+def cleanup(mask: np.ndarray, d: Dict[str, Any]) -> np.ndarray:
+    """Closing followed by the component filter (shared by the method and the baselines)."""
+    return filter_components(close_mask(mask, d["close_kernel"], d["close_iterations"]), d)
+
+
+def detect_cracks(blurred: np.ndarray, cfg: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Black-hat -> threshold -> cleanup. Returns {"blackhat", "threshold", "closed", "mask"}."""
     d = cfg["detect"]
-    bh = blackhat(gray, d["kernel_size"])
-    mask = threshold_blackhat(bh, d)
-    mask = close_mask(mask, d["close_kernel"], d["close_iterations"])
-    return filter_components(mask, d)
+    bh = blackhat(blurred, d["kernel_size"])
+    thresh = threshold_blackhat(bh, d)
+    closed = close_mask(thresh, d["close_kernel"], d["close_iterations"])
+    return {"blackhat": bh, "threshold": thresh, "closed": closed, "mask": filter_components(closed, d)}
