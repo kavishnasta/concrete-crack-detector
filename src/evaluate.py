@@ -174,6 +174,20 @@ def summary_plot(df: pd.DataFrame, path: Path) -> None:
     plt.close(fig)
 
 
+def summary_text(df: pd.DataFrame, cfg: Dict[str, Any]) -> str:
+    """Human-readable accuracy summary (saved as results/accuracy.txt)."""
+    d, n = cfg["detect"], len(df)
+    lines = [f"METU evaluation: {n} images ({(df.actual == 'cracked').sum()} cracked, {(df.actual == 'clean').sum()} clean)",
+             f"Settings: black-hat kernel {d['kernel_size']}, contrast floor {d['min_threshold']}, "
+             f"min crack length {cfg['measure']['min_crack_length']} px, random seed {cfg['evaluate']['random_seed']}",
+             "", f"{'Method':22s}{'TP':>5}{'FN':>5}{'FP':>5}{'TN':>5}{'Accuracy':>10}{'Precision':>10}{'Recall':>8}{'F1':>7}"]
+    for col, name in METHODS.items():
+        s = scores(df, col)
+        lines.append(f"{name:22s}{s['TP']:>5}{s['FN']:>5}{s['FP']:>5}{s['TN']:>5}{100 * s['accuracy']:>9.1f}%"
+                     f"{100 * s['precision']:>9.1f}%{100 * s['recall']:>7.1f}%{100 * s['f1']:>6.1f}%")
+    return "\n".join(lines) + "\n"
+
+
 def run_metu(cfg: Dict[str, Any]) -> int:
     """Evaluate on the METU sample and write results.csv plus a few figures to results/."""
     cfg["detect"].update(cfg["metu_tuned"]["detect"])
@@ -208,12 +222,9 @@ def run_metu(cfg: Dict[str, Any]) -> int:
         res = run_steps(load_image(root / row["image"]), cfg)
         save_steps_figure(res, out / name, f"{title} (METU {row['image']}, correctly classified)", cfg)
 
-    print(f"\nActual: {(df.actual == 'cracked').sum()} cracked, {(df.actual == 'clean').sum()} clean")
-    for col, name in METHODS.items():
-        s = scores(df, col)
-        print(f"{name:22s} TP={s['TP']} FN={s['FN']} FP={s['FP']} TN={s['TN']}  acc={s['accuracy']:.3f} "
-              f"prec={s['precision']:.3f} rec={s['recall']:.3f} F1={s['f1']:.3f}")
-    print(f"Results written to {out}")
+    text = summary_text(df, cfg)
+    (out / "accuracy.txt").write_text(text, encoding="utf-8")
+    print("\n" + text + f"\nResults written to {out}")
     return 0
 
 

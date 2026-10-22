@@ -40,9 +40,10 @@ Every image's actual vs. predicted class is in [results/results.csv](results/res
 |---|---|---|---|---|
 | **Proposed (black-hat)** | **95.5%** | **94.5%** | **96.5%** | **95.5%** |
 | Canny edges | 92.8% | 91.2% | 94.8% | 93.0% |
-| Global Otsu | 41.9% | 45.6% | 82.2% | 58.6% |
+| Global Otsu | 41.9% | 45.5% | 82.2% | 58.6% |
 
 Confusion matrix (proposed): 966 true cracked, 943 true clean, 56 false alarms, 35 missed.
+The same numbers are saved in [results/accuracy.txt](results/accuracy.txt) (rewritten on every `--evaluate metu` run).
 Pictures: `results/summary.png`, `results/wrong_predictions_p*.png`, `results/correct_examples.png`,
 `results/pipeline_cracked.png`, `results/pipeline_clean.png`.
 

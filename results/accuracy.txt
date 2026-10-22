@@ -1,0 +1,7 @@
+METU evaluation: 2000 images (1001 cracked, 999 clean)
+Settings: black-hat kernel 31, contrast floor 100, min crack length 15 px, random seed 42
+
+Method                   TP   FN   FP   TN  Accuracy Precision  Recall     F1
+Proposed (black-hat)    966   35   56  943     95.5%     94.5%   96.5%  95.5%
+Global Otsu             823  178  984   15     41.9%     45.5%   82.2%  58.6%
+Canny                   949   52   91  908     92.8%     91.2%   94.8%  93.0%
